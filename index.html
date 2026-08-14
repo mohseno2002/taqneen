@@ -209,7 +209,7 @@ table.t tr:hover td{background:#fbf9f3}
     <div class="nav-foot">
       <div id="syncFoot" style="margin-bottom:6px"></div>
       <small id="whoFoot"></small><br>
-      <small>build 1.26</small>
+      <small>build 1.27</small>
     </div>
   </aside>
   <main class="main">
@@ -230,7 +230,7 @@ table.t tr:hover td{background:#fbf9f3}
 <div class="print-area" id="printArea"></div>
 <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
 <script>
-var BUILD = "1.26";
+var BUILD = "1.27";
 var APP_ID = "taqneen";
 /* ================= إعداد الاتصال =================
    املأ السطرين التاليين ببيانات مشروع فايربيز الجديد الخاص بالتقنين.
@@ -381,14 +381,28 @@ var Db = {
     var qn = Db.queue().length;
     var txt = state==="ok" ? "متزامن" : (state==="wait" ? "بانتظار الشبكة" : (state==="busy"?"جارٍ الحفظ…":"خطأ مزامنة"));
     if(qn) txt = txt + " · " + qn + " مؤجل";
+    if(detail && (state==="err" || state==="wait")) txt = txt + " — " + String(detail).slice(0,70);
     b.textContent = txt;
     b.className = "badge-sync" + (state==="err"?" err":(state==="wait"?" wait":""));
+    b.style.whiteSpace = "normal";
+    b.style.maxWidth = "62vw";
     b.title = detail || "";
     if(f) f.innerHTML = "<span class=\u0022pill " + (state==="err"?"danger":(state==="wait"?"amber":"green")) + "\u0022>" + esc(txt) + "</span>";
     if(state==="err") ST.lastErr = detail || "خطأ غير معروف";
   },
+  lastDetail:"",
+  readErr:function(r){
+    /* فايربيز يردّ {"error":"..."} — النص هو التشخيص، والحالة وحدها لا تكفى */
+    return r.text().then(function(t){
+      var msg = "";
+      try{ var j=JSON.parse(t); msg = j && j.error ? (typeof j.error==="string"? j.error : JSON.stringify(j.error)) : t; }
+      catch(e){ msg = t; }
+      return new Error("HTTP " + r.status + " — " + (msg||r.statusText||"بلا نص"));
+    });
+  },
   hint:function(e){
     var m = (e && e.message) ? e.message : String(e);
+    Db.lastDetail = m;
     if(/Failed to fetch|NetworkError|load failed/i.test(m)) return m + " — الشبكة أو CORS";
     if(/401|403|Permission/i.test(m)) return m + " — صلاحيات القاعدة";
     if(/400/.test(m)) return m + " — صيغة الطلب أو المسار";
@@ -404,8 +418,7 @@ var Db = {
     return Auth.ensure().then(function(){
       return fetch(Db.url(path),{cache:"no-store"});
     }).then(function(r){
-      if(r.status===401 || r.status===403) throw new Error("HTTP " + r.status + " — الصلاحيات: حسابك لا يملك قراءة هذا المسار");
-      if(!r.ok) throw new Error("HTTP " + r.status + " " + r.statusText);
+      if(!r.ok) return Db.readErr(r).then(function(e){ throw e; });
       return r.json();
     });
   },
@@ -419,14 +432,14 @@ var Db = {
         method:"PATCH", headers:{"Content-Type":"application/json"}, body:JSON.stringify(obj)
       });
     }).then(function(r){
-      if(r.status===401 || r.status===403) throw new Error("HTTP " + r.status + " — الصلاحيات: الكتابة مرفوضة على هذا المسار");
-      if(!r.ok) throw new Error("HTTP " + r.status + " " + r.statusText);
+      if(!r.ok) return Db.readErr(r).then(function(e){ throw e; });
       Db.setBadge("ok","");
       Db.flush();
       return true;
     }).catch(function(e){
-      Db.enqueue(path,obj);
-      Db.setBadge("wait", Db.hint(e));
+      var why = Db.hint(e);
+      Db.enqueue(path,obj,why);
+      Db.setBadge("wait", why);
       return false;
     });
   },
@@ -442,9 +455,14 @@ var Db = {
   queue:function(){
     try{ return JSON.parse(localStorage.getItem(Db.queueKey) || "[]"); }catch(e){ return []; }
   },
-  enqueue:function(path,obj){
+  enqueue:function(path,obj,why){
     var arr = Db.queue();
-    arr.push({path:path, obj:obj, t:Date.now()});
+    for(var i=0;i<arr.length;i++){
+      if(arr[i].path===path){ arr[i].obj=obj; arr[i].t=Date.now(); arr[i].why=why||""; 
+        try{ localStorage.setItem(Db.queueKey, JSON.stringify(arr)); }catch(e){}
+        return; }
+    }
+    arr.push({path:path, obj:obj, t:Date.now(), why:why||""});
     if(arr.length>400) arr = arr.slice(-400);
     try{ localStorage.setItem(Db.queueKey, JSON.stringify(arr)); }catch(e){}
   },
@@ -455,12 +473,23 @@ var Db = {
     Auth.ensure().then(function(){
       return fetch(Db.url(item.path),{method:"PATCH",headers:{"Content-Type":"application/json"},body:JSON.stringify(item.obj)});
     }).then(function(r){
-        if(!r.ok) throw new Error("HTTP " + r.status);
+        if(!r.ok) return Db.readErr(r).then(function(e){ throw e; });
+        return r;
+    }).then(function(r){
         arr.shift();
         try{ localStorage.setItem(Db.queueKey, JSON.stringify(arr)); }catch(e){}
         Db.setBadge(arr.length?"wait":"ok","");
         if(arr.length) setTimeout(Db.flush,400);
-    }).catch(function(e){ Db.setBadge("wait", Db.hint(e)); });
+    }).catch(function(e){
+      var why = Db.hint(e);
+      var a = Db.queue();
+      if(a.length){ a[0].why = why; try{ localStorage.setItem(Db.queueKey, JSON.stringify(a)); }catch(x){} }
+      Db.setBadge("wait", why);
+    });
+  },
+  clearQueue:function(){
+    try{ localStorage.removeItem(Db.queueKey); }catch(e){}
+    Db.setBadge("ok","");
   }
 };
 
@@ -2081,6 +2110,40 @@ function viewAdmins(c){
   if(ST.role==="committee"){
     if(ACLS===null && !ACL_TRIED){ ACL_TRIED=true; loadAcls(function(){ render(); }); }
     viewUsersPanel(c);
+  }
+
+  var qn=Db.queue();
+  if(qn.length){
+    var pq=panel("التشخيص","تعديلات لم تصل القاعدة — " + qn.length,[]);
+    var wq=el("div",{"class":"tbl-wrap"},[]);
+    var tq=el("table",{"class":"t"},[]);
+    tq.innerHTML="<thead><tr><th>المسار</th><th>سبب الرفض</th><th>إجراء</th></tr></thead>";
+    var bq=el("tbody",{},[]);
+    qn.forEach(function(it,ix){
+      var tr=el("tr",{},[]);
+      tr.innerHTML="<td style=\u0022font-family:var(--mono);font-size:10px\u0022>"+esc(it.path)+"</td>"+
+        "<td style=\u0022font-size:10.5px;color:#7d3427\u0022>"+esc(it.why||"لم تُحاوَل بعد")+"</td><td></td>";
+      var td=tr.getElementsByTagName("td")[2];
+      var bx=el("button",{"class":"btn sm warn"},["إسقاط"]);
+      bx.onclick=function(){
+        var a=Db.queue(); a.splice(ix,1);
+        try{ localStorage.setItem(Db.queueKey, JSON.stringify(a)); }catch(e){}
+        Db.setBadge(a.length?"wait":"ok","");
+        render();
+      };
+      td.appendChild(bx);
+      bq.appendChild(tr);
+    });
+    tq.appendChild(bq); wq.appendChild(tq); pq.appendChild(wq);
+    var aq=el("div",{"class":"actions"},[]);
+    var b1q=el("button",{"class":"btn solid"},["إعادة المحاولة"]);
+    b1q.onclick=function(){ Db.flush(); setTimeout(render,1200); };
+    aq.appendChild(b1q);
+    var b2q=el("button",{"class":"btn warn"},["تفريغ الطابور"]);
+    b2q.onclick=function(){ if(confirm("إسقاط كل التعديلات المؤجَّلة؟ لن تصل القاعدة.")) { Db.clearQueue(); render(); } };
+    aq.appendChild(b2q);
+    pq.appendChild(aq);
+    c.appendChild(pq);
   }
 
   var p2=panel("الجلسة","صفتك الحالية",[]);
