@@ -209,7 +209,7 @@ table.t tr:hover td{background:#fbf9f3}
     <div class="nav-foot">
       <div id="syncFoot" style="margin-bottom:6px"></div>
       <small id="whoFoot"></small><br>
-      <small>build 1.22</small>
+      <small>build 1.24</small>
     </div>
   </aside>
   <main class="main">
@@ -230,7 +230,7 @@ table.t tr:hover td{background:#fbf9f3}
 <div class="print-area" id="printArea"></div>
 <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
 <script>
-var BUILD = "1.22";
+var BUILD = "1.24";
 var APP_ID = "taqneen";
 /* ================= إعداد الاتصال =================
    املأ السطرين التاليين ببيانات مشروع فايربيز الجديد الخاص بالتقنين.
@@ -258,12 +258,45 @@ var DEADLINE_DAYS = 30;
 var COMMITTEE_DECREE = "القرار رقم (79) لسنة 2026 الصادر من السيد المهندس/ الوكيل الدائم لوزارة الموارد المائية والري بتاريخ 8/6/2026";
 var CULT_CUTOFF = "15/10/2023";
 
-/* قائمة مبدئية — تُراجَع وتُعدَّل من تبويب «الإدارات والصلاحيات» */
-var DEFAULT_ADMINS = [
-  "القاهرة والجيزة","القليوبية","المنوفية","الغربية","كفر الشيخ","الدقهلية","دمياط",
-  "الشرقية","الإسماعيلية","البحيرة","الإسكندرية","الفيوم","بنى سويف","المنيا",
-  "أسيوط","سوهاج","قنا","أسوان"
+/* ============ الإدارات المركزية — بذرة مبنية داخل التطبيق ============
+   منقولة من PROJECT.govs فى تطبيق «حياة كريمة» بمعرّفاتها وأقاليمها وإملائها هناك حرفياً
+   (اسوان · اسيوط · الاسكندرية بلا همزات) ليكون اسم الإدارة واحداً فى التطبيقين.
+   قنا تشمل الأقصر بقرار م. محسن — فالعدد ١٨ إدارة.
+   ارفع ADMIN_SEED_VER عند أى تعديل على البذرة لتحلّ محلّ المحفوظ فى القاعدة. */
+var ADMIN_SEED_VER = 1;
+var ADMIN_SEED = [
+  {id:"kafr",      name:"كفر الشيخ",      region:"شمال الدلتا"},
+  {id:"damietta",  name:"دمياط",          region:"شرق الدلتا"},
+  {id:"sharkia",   name:"الشرقية",        region:"شرق الدلتا"},
+  {id:"dakahlia",  name:"الدقهلية",       region:"شرق الدلتا"},
+  {id:"menoufia",  name:"المنوفية",       region:"وسط الدلتا"},
+  {id:"gharbia",   name:"الغربية",        region:"وسط الدلتا"},
+  {id:"beheira",   name:"البحيرة",        region:"غرب الدلتا"},
+  {id:"alex",      name:"الاسكندرية",     region:"غرب الدلتا"},
+  {id:"qalyubia",  name:"القليوبية",      region:"القاهرة الكبرى"},
+  {id:"giza",      name:"الجيزة",         region:"القاهرة الكبرى"},
+  {id:"fayoum",    name:"الفيوم",         region:"مصر الوسطى"},
+  {id:"benisuef",  name:"بنى سويف",       region:"مصر الوسطى"},
+  {id:"minya",     name:"المنيا",         region:"مصر الوسطى"},
+  {id:"assiut",    name:"اسيوط",          region:"مصر الوسطى"},
+  {id:"sohag",     name:"سوهاج",          region:"مصر العليا"},
+  {id:"qena",      name:"قنا",            region:"مصر العليا"},
+  {id:"aswan",     name:"اسوان",          region:"مصر العليا"},
+  {id:"canal",     name:"محافظات القناه", region:"محافظات القناة"}
 ];
+var DEFAULT_ADMINS = ADMIN_SEED.map(function(a){ return a.name; });
+var ADMIN_META = {};
+ADMIN_SEED.forEach(function(a){ ADMIN_META[a.name] = a; });
+
+/* البذرة تغلب المحفوظ إذا كان أقدم — بلا لصق يدوى.
+   ترجع {list, push} — push تعنى أن القاعدة تحتاج تحديثاً (تكتبه اللجنة وحدها). */
+function resolveAdmins(node){
+  if(!node || !node.list || !node.list.length) return {list:DEFAULT_ADMINS.slice(), push:true};
+  var ver = (typeof node.seedVer === "number") ? node.seedVer : 0;
+  if(node.custom && ver >= ADMIN_SEED_VER) return {list:node.list.slice(), push:false};
+  if(ver >= ADMIN_SEED_VER) return {list:node.list.slice(), push:false};
+  return {list:DEFAULT_ADMINS.slice(), push:true};
+}
 
 var STATUSES = [
   "وارد جديد",
@@ -613,7 +646,12 @@ function pullAll(){
     Db.get("apps/" + APP_ID + "/data/admins").catch(function(){ return null; })
   ]).then(function(res){
     var legacy = absorbRequests(res[0]);
-    if(res[1] && res[1].list && res[1].list.length) ST.admins = res[1].list;
+    var ra = resolveAdmins(res[1]);
+    ST.admins = ra.list;
+    if(ra.push && ST.role==="committee"){
+      Db.patch("apps/" + APP_ID + "/data/admins",
+        {list:DEFAULT_ADMINS, meta:ADMIN_SEED, seedVer:ADMIN_SEED_VER, custom:false});
+    }
     ST.loaded = true;
     attachGeo();
     saveLocal();
@@ -698,7 +736,11 @@ function gateErr(m){
 function initGate(){
   loadLocal();
   CFG = cfgLoad();
-  if(!CFG.db || !CFG.key) q("gateSetup").style.display="block";
+  if(!CFG.db || !CFG.key){
+    q("gateSetup").style.display="block";
+    if(CFG.db) q("cfgDb").value=CFG.db;
+    if(CFG.key) q("cfgKey").value=CFG.key;
+  }
   Auth.restore();
   if(AUTH.email && q("gateEmail")) q("gateEmail").value=AUTH.email;
   q("gateGo").onclick=function(){ doLogin(); };
@@ -715,8 +757,9 @@ function initGate(){
 function doLogin(){
   var setup=q("gateSetup");
   if(setup && setup.style.display!=="none"){
-    var db=q("cfgDb").value.trim(), key=q("cfgKey").value.trim();
-    if(!db || !key){ gateErr("أدخل عنوان القاعدة ومفتاح المشروع."); return; }
+    var db=q("cfgDb").value.trim() || CFG.db, key=q("cfgKey").value.trim() || CFG.key;
+    if(!db){ gateErr("أدخل عنوان قاعدة البيانات."); return; }
+    if(!key){ gateErr("أدخل مفتاح المشروع (Web API Key)."); return; }
     if(db.indexOf("https://")!==0){ gateErr("عنوان القاعدة يجب أن يبدأ بـhttps://"); return; }
     cfgSave(db,key); CFG=cfgLoad();
   }
@@ -855,7 +898,7 @@ function viewDash(c){
   c.appendChild(el("div",{"class":"grid g3",style:"margin-top:14px"},[
     kpi("▤","","إجمالى المساحة", fmtNum(fed,2), "فدان", "الفدان = 4200.83 م²"),
     kpi("◔","sand","قيد التداول", String(open), "طلب", soon + " منها يستحق خلال أسبوع"),
-    kpi("⌂","green","الإدارات المسجَّلة", String(ST.admins.length), "إدارة", ST.admins.length===18?"مطابق للـ18":"المطلوب 18 — راجع القائمة")
+    kpi("⌂","green","الإدارات المسجَّلة", String(ST.admins.length), "إدارة", ST.admins.length===DEFAULT_ADMINS.length?"مطابقة للقائمة المعتمدة":"القياس " + DEFAULT_ADMINS.length + " إدارة — راجع القائمة")
   ]));
 
   if(late>0){
@@ -1878,9 +1921,26 @@ function nidLocalCount(){ var m=nidStore(); return Object.keys(m).length; }
 function viewAdmins(c){
   var p=panel("الضبط","الإدارات المركزية (" + ST.admins.length + ")",[]);
   p.appendChild(el("div",{"class":"notebox"},[
-    "القائمة الحالية مبدئية وُضعت للتشغيل — راجعها لتطابق الـ18 إدارة مركزية بمسمياتها الرسمية. التعديل هنا ينعكس على كل الأجهزة."
+    "الإدارات مبنية داخل التطبيق ومنقولة من تطبيق «حياة كريمة» بمعرّفاتها وأقاليمها وإملائها هناك حرفياً (قنا تشمل الأقصر) — ليكون اسم الإدارة واحداً فى التطبيقين. التعديل هنا ينعكس على كل الأجهزة."
   ]));
-  var ta=el("textarea",{"class":"i",id:"admList",style:"min-height:260px;font-family:var(--mono);font-size:12px"},[]);
+  var byReg={}, order=[];
+  ST.admins.forEach(function(n){
+    var r = ADMIN_META[n] ? ADMIN_META[n].region : "غير مصنَّف";
+    if(!byReg[r]){ byReg[r]=[]; order.push(r); }
+    byReg[r].push(n);
+  });
+  var wrapReg=el("div",{"class":"grid g3",style:"margin-top:12px"},[]);
+  order.forEach(function(r){
+    var card=el("div",{"class":"kpi-card",style:"display:block"},[]);
+    card.appendChild(el("div",{"class":"eyebrow"},[r]));
+    byReg[r].forEach(function(n){
+      card.appendChild(el("div",{style:"font-size:12px;padding:3px 0;border-bottom:1px solid #efeadf"},[n]));
+    });
+    wrapReg.appendChild(card);
+  });
+  p.appendChild(wrapReg);
+  p.appendChild(el("div",{"class":"hint"},["البذرة إصدار " + ADMIN_SEED_VER + " — تُزرع تلقائياً فى القاعدة عند دخول اللجنة، والتعديل اليدوى أدناه يجعل القائمة مخصّصة فلا تدهسها البذرة."]));
+  var ta=el("textarea",{"class":"i",id:"admList",style:"min-height:200px;font-family:var(--mono);font-size:12px"},[]);
   ta.value=ST.admins.join("\n");
   p.appendChild(el("label",{"class":"f"},["إدارة فى كل سطر"]));
   p.appendChild(ta);
@@ -1890,8 +1950,10 @@ function viewAdmins(c){
     var arr=ta.value.split("\n").map(function(s){ return s.trim(); }).filter(function(s){ return s.length>0; });
     if(!arr.length){ q("admMsg").innerHTML="<div class=\u0022errbox\u0022>القائمة فارغة.</div>"; return; }
     ST.admins=arr; saveLocal();
-    Db.patch("apps/" + APP_ID + "/data/admins", {list:arr});
-    q("admMsg").innerHTML="<div class=\u0022okbox\u0022>تم الحفظ — " + arr.length + " إدارة" + (arr.length===18?"":" (المطلوب 18)") + ".</div>";
+    Db.patch("apps/" + APP_ID + "/data/admins",
+      {list:arr, seedVer:ADMIN_SEED_VER, custom:true});
+    q("admMsg").innerHTML="<div class=\u0022okbox\u0022>تم الحفظ — " + arr.length + " إدارة" +
+      (arr.length===DEFAULT_ADMINS.length?"":" (القائمة المعتمدة " + DEFAULT_ADMINS.length + ")") + ".</div>";
   };
   act.appendChild(b);
   p.appendChild(act);
