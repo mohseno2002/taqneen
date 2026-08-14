@@ -209,7 +209,7 @@ table.t tr:hover td{background:#fbf9f3}
     <div class="nav-foot">
       <div id="syncFoot" style="margin-bottom:6px"></div>
       <small id="whoFoot"></small><br>
-      <small>build 1.31</small>
+      <small>build 1.32</small>
     </div>
   </aside>
   <main class="main">
@@ -230,7 +230,7 @@ table.t tr:hover td{background:#fbf9f3}
 <div class="print-area" id="printArea"></div>
 <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
 <script>
-var BUILD = "1.31";
+var BUILD = "1.32";
 var APP_ID = "taqneen";
 /* ================= إعداد الاتصال =================
    املأ السطرين التاليين ببيانات مشروع فايربيز الجديد الخاص بالتقنين.
@@ -891,31 +891,43 @@ function logout(){
 }
 
 /* ============ التنقل ============ */
+/* الأقسام حسب الصفة — لا يُعرض قسم لا يملك المستخدم صلاحيته */
+function visibleSections(){
+  if(ST.role==="committee") return SECTIONS;
+  return SECTIONS.filter(function(s){ return s.id!=="committee"; });
+}
+function sectionTitle(sec){
+  if(sec.id==="admins" && ST.role!=="committee") return {eyebrow:"الجلسة", title:"حسابى"};
+  return {eyebrow:sec.eyebrow, title:sec.title};
+}
 function buildNav(){
   var nav=q("nav"), mnav=q("mnav");
   nav.innerHTML=""; mnav.innerHTML="";
-  SECTIONS.forEach(function(s,i){
+  visibleSections().forEach(function(s,i){
+    var tt=sectionTitle(s);
     var b=el("button",{"data-id":s.id},[
       el("span",{"class":"nav-icon"},[s.icon]),
-      el("span",{},[s.title]),
+      el("span",{},[tt.title]),
       el("span",{"class":"nav-num"},[pad2(i+1)])
     ]);
     b.onclick=function(){ selectSection(s.id); };
     nav.appendChild(b);
-    var m=el("button",{"data-id":s.id},[s.icon + " " + s.title]);
+    var m=el("button",{"data-id":s.id},[s.icon + " " + tt.title]);
     m.onclick=function(){ selectSection(s.id); };
     mnav.appendChild(m);
   });
 }
 function selectSection(id){
   var sec=null;
-  SECTIONS.forEach(function(s){ if(s.id===id) sec=s; });
+  visibleSections().forEach(function(s){ if(s.id===id) sec=s; });
+  if(!sec){ id="dash"; visibleSections().forEach(function(s){ if(s.id===id) sec=s; }); }
   if(!sec) return;
   ST.section=id;
   var btns=document.querySelectorAll("#nav button, #mnav button");
   for(var i=0;i<btns.length;i++){ btns[i].classList.toggle("active", btns[i].getAttribute("data-id")===id); }
-  q("tb-eyebrow").textContent=sec.eyebrow;
-  q("tb-title").textContent=sec.title;
+  var tt=sectionTitle(sec);
+  q("tb-eyebrow").textContent=tt.eyebrow;
+  q("tb-title").textContent=tt.title;
   window.scrollTo(0,0);
   render();
 }
@@ -1693,9 +1705,10 @@ function drawMap(){
 /* ============ اللجنة الدائمة والمحاضر ============ */
 function viewCommittee(c){
   if(ST.role!=="committee"){
-    c.appendChild(panel("صلاحية","اللجنة الدائمة",[
-      el("div",{"class":"notebox"},["هذا القسم متاح للجنة الدائمة والإدارة العليا. أنت داخل بصفة مُدخل بيانات لإدارة " + (ST.admin||"—") + "."])
+    c.appendChild(panel("صلاحية","غير متاح",[
+      el("div",{"class":"notebox"},["إصدار المحاضر من اختصاص اللجنة الدائمة. أنت داخل بصفة مُدخل بيانات لإدارة " + (ST.admin||"—") + "."])
     ]));
+    return;
   }
   var ready = scopedRecs().filter(function(r){ return r.status==="معروض على اللجنة" || r.status==="بقطاع التخطيط" || r.status==="موافقة مبدئية"; });
   var all = scopedRecs();
@@ -2204,6 +2217,7 @@ function viewUsersPanel(c){
 
 /* ============ الإدارات والصلاحيات ============ */
 function viewAdmins(c){
+  if(ST.role!=="committee"){ viewMyAccount(c); return; }
   var p=panel("الضبط","الإدارات المركزية (" + ST.admins.length + ")",[]);
   var byReg={}, order=[];
   ST.admins.forEach(function(n){
@@ -2332,6 +2346,68 @@ function viewAdmins(c){
     "الرقم القومى يُرسل مقنّعاً فقط؛ الكامل لا يغادر هذا الجهاز (" + nidLocalCount() + " رقماً محفوظاً محلياً)."
   ]));
   c.appendChild(p2);
+}
+
+/* ============ حسابى — لمُدخل البيانات ============ */
+function viewMyAccount(c){
+  var p=panel("الجلسة","بيانات الدخول",[]);
+  p.appendChild(el("div",{"class":"rowflex"},[
+    el("span",{"class":"chip"},["مُدخل بيانات — " + (ST.admin||"—")]),
+    el("span",{"class":"chip"},[AUTH.email||"—"]),
+    el("span",{"class":"chip"},["الجلسة تنتهى " + new Date(AUTH.exp).toLocaleTimeString("ar-EG")])
+  ]));
+  p.appendChild(el("div",{"class":"hint"},[
+    "نطاقك: طلبات إدارة " + esc(ST.admin||"—") + " فقط. إصدار المحاضر واعتماد الطلبات من اختصاص اللجنة الدائمة."
+  ]));
+
+  p.appendChild(el("div",{"class":"sechead"},["تغيير كلمة المرور"]));
+  var pwWrap=el("div",{},[el("label",{"class":"f"},["كلمة مرور جديدة (٦ محارف فأكثر)"])]);
+  var pwIn=el("input",{"class":"i",id:"myPass2",type:"password",placeholder:"••••••"});
+  pwWrap.appendChild(pwIn);
+  p.appendChild(pwWrap);
+  var a1=el("div",{"class":"actions"},[]);
+  var b1=el("button",{"class":"btn"},["تغيير كلمة المرور"]);
+  b1.onclick=function(){
+    var m=q("pwMsg2");
+    if(!pwIn.value || pwIn.value.length<6){ m.innerHTML="<div class=\u0022errbox\u0022>٦ محارف على الأقل.</div>"; return; }
+    m.innerHTML="<div class=\u0022okbox\u0022>جارٍ التغيير…</div>";
+    Auth.changePass(pwIn.value).then(function(){
+      pwIn.value="";
+      m.innerHTML="<div class=\u0022okbox\u0022>تم التغيير — استعملها فى الدخول القادم.</div>";
+    }).catch(function(e){ m.innerHTML="<div class=\u0022errbox\u0022>" + esc(e.message) + "</div>"; });
+  };
+  a1.appendChild(b1);
+  var b2=el("button",{"class":"btn warn"},["تسجيل الخروج"]);
+  b2.onclick=function(){ if(confirm("تسجيل الخروج من المنظومة؟")) logout(); };
+  a1.appendChild(b2);
+  var b3=el("button",{"class":"btn"},["↻ إعادة الجلب"]);
+  b3.onclick=function(){ pullAll(); };
+  a1.appendChild(b3);
+  p.appendChild(a1);
+  p.appendChild(el("div",{id:"pwMsg2"},[]));
+  c.appendChild(p);
+
+  var qn=Db.queue();
+  if(qn.length){
+    var pq=panel("التشخيص","تعديلات لم تصل القاعدة — " + qn.length,[]);
+    var wq=el("div",{"class":"tbl-wrap"},[]);
+    var tq=el("table",{"class":"t"},[]);
+    tq.innerHTML="<thead><tr><th>المسار</th><th>سبب الرفض</th></tr></thead>";
+    var bq=el("tbody",{},[]);
+    qn.forEach(function(it){
+      var tr=el("tr",{},[]);
+      tr.innerHTML="<td style=\u0022font-family:var(--mono);font-size:10px\u0022>"+esc(it.path)+"</td>"+
+        "<td style=\u0022font-size:10.5px;color:#7d3427\u0022>"+esc(it.why||"لم تُحاوَل بعد")+"</td>";
+      bq.appendChild(tr);
+    });
+    tq.appendChild(bq); wq.appendChild(tq); pq.appendChild(wq);
+    var aq=el("div",{"class":"actions"},[]);
+    var bq1=el("button",{"class":"btn solid"},["إعادة المحاولة"]);
+    bq1.onclick=function(){ Db.flush(); setTimeout(render,1200); };
+    aq.appendChild(bq1);
+    pq.appendChild(aq);
+    c.appendChild(pq);
+  }
 }
 
 /* ============ الإقلاع ============ */
