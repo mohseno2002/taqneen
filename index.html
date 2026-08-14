@@ -209,7 +209,7 @@ table.t tr:hover td{background:#fbf9f3}
     <div class="nav-foot">
       <div id="syncFoot" style="margin-bottom:6px"></div>
       <small id="whoFoot"></small><br>
-      <small>build 1.32</small>
+      <small>build 1.33</small>
     </div>
   </aside>
   <main class="main">
@@ -230,7 +230,7 @@ table.t tr:hover td{background:#fbf9f3}
 <div class="print-area" id="printArea"></div>
 <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
 <script>
-var BUILD = "1.32";
+var BUILD = "1.33";
 var APP_ID = "taqneen";
 /* ================= إعداد الاتصال =================
    املأ السطرين التاليين ببيانات مشروع فايربيز الجديد الخاص بالتقنين.
@@ -443,8 +443,13 @@ var Db = {
       return Promise.resolve(false);
     }
     obj = obj || {};
-    obj.updatedAt = Date.now();
-    obj.src = APP_ID;
+    /* لقطة فورية: الجسم يُجمَّد الآن لا عند تنفيذ الوعد — وإلا ركب الطلبَ أى حقل
+       أضافه المستدعِى بعد النداء (تسرّب المضلّع إلى السجل، بيلد 1.32) */
+    var snap = {}, kk;
+    for(kk in obj){ if(Object.prototype.hasOwnProperty.call(obj,kk)) snap[kk]=obj[kk]; }
+    snap.updatedAt = Date.now();
+    snap.src = APP_ID;
+    obj = snap;
     Db.setBadge("busy","");
     return Auth.ensure().then(function(){
       return fetch(Db.url(path),{
@@ -884,6 +889,9 @@ function afterLogin(){
 function logout(){
   Auth.clear();
   ST.recs={}; GEOC={}; GEO_LOADED=false;
+  ACLS=null; ACL_TRIED=false;
+  ST.role="entry"; ST.admin=""; ST.user=""; ST.editId=null; ST.lastErr="";
+  ST.filters={q:"", status:"", admin:"", decreed:""};
   q("shell").style.display="none";
   q("gate").style.display="grid";
   q("gateMsg").innerHTML="";
@@ -1265,7 +1273,8 @@ function viewForm(c){
   ]));
   p.appendChild(frow([
     fld("shiakha","الشياخة","text"),
-    fld("admin","الإدارة المركزية","select",[""].concat(ST.admins)),
+    fld("admin","الإدارة المركزية","select",
+        (ST.role==="committee") ? [""].concat(ST.admins) : [ST.admin]),
     fld("status","حالة الطلب","select",STATUSES)
   ]));
   p.appendChild(el("label",{"class":"f"},["المساحة المطلوب تقنينها"]));
