@@ -209,7 +209,7 @@ table.t tr:hover td{background:#fbf9f3}
     <div class="nav-foot">
       <div id="syncFoot" style="margin-bottom:6px"></div>
       <small id="whoFoot"></small><br>
-      <small>build 1.24</small>
+      <small>build 1.25</small>
     </div>
   </aside>
   <main class="main">
@@ -230,7 +230,7 @@ table.t tr:hover td{background:#fbf9f3}
 <div class="print-area" id="printArea"></div>
 <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
 <script>
-var BUILD = "1.24";
+var BUILD = "1.25";
 var APP_ID = "taqneen";
 /* ================= إعداد الاتصال =================
    املأ السطرين التاليين ببيانات مشروع فايربيز الجديد الخاص بالتقنين.
@@ -1920,9 +1920,6 @@ function nidLocalCount(){ var m=nidStore(); return Object.keys(m).length; }
 /* ============ الإدارات والصلاحيات ============ */
 function viewAdmins(c){
   var p=panel("الضبط","الإدارات المركزية (" + ST.admins.length + ")",[]);
-  p.appendChild(el("div",{"class":"notebox"},[
-    "الإدارات مبنية داخل التطبيق ومنقولة من تطبيق «حياة كريمة» بمعرّفاتها وأقاليمها وإملائها هناك حرفياً (قنا تشمل الأقصر) — ليكون اسم الإدارة واحداً فى التطبيقين. التعديل هنا ينعكس على كل الأجهزة."
-  ]));
   var byReg={}, order=[];
   ST.admins.forEach(function(n){
     var r = ADMIN_META[n] ? ADMIN_META[n].region : "غير مصنَّف";
@@ -1939,7 +1936,6 @@ function viewAdmins(c){
     wrapReg.appendChild(card);
   });
   p.appendChild(wrapReg);
-  p.appendChild(el("div",{"class":"hint"},["البذرة إصدار " + ADMIN_SEED_VER + " — تُزرع تلقائياً فى القاعدة عند دخول اللجنة، والتعديل اليدوى أدناه يجعل القائمة مخصّصة فلا تدهسها البذرة."]));
   var ta=el("textarea",{"class":"i",id:"admList",style:"min-height:200px;font-family:var(--mono);font-size:12px"},[]);
   ta.value=ST.admins.join("\n");
   p.appendChild(el("label",{"class":"f"},["إدارة فى كل سطر"]));
