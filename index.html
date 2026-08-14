@@ -167,6 +167,9 @@ table.t tr:hover td{background:#fbf9f3}
 .print-area table td,.print-area table th{border:1px solid #000;padding:7px 8px;text-align:right}
 .print-area .sig{margin-top:16px}
 .print-area .ph{font-weight:700}
+#cmPrev table,.doc-t{width:100%;border-collapse:collapse;margin:8px 0;font-size:11px}
+#cmPrev table td,#cmPrev table th,.doc-t td,.doc-t th{border:1px solid #9a917d;padding:5px 7px;text-align:right}
+#cmPrev table th,.doc-t th{background:#f0ece0;font-weight:700}
 .hint{font-size:10px;color:var(--muted);margin-top:4px}
 .rowflex{display:flex;gap:8px;flex-wrap:wrap;align-items:center}
 </style>
@@ -209,7 +212,7 @@ table.t tr:hover td{background:#fbf9f3}
     <div class="nav-foot">
       <div id="syncFoot" style="margin-bottom:6px"></div>
       <small id="whoFoot"></small><br>
-      <small>build 1.34</small>
+      <small>build 1.35</small>
     </div>
   </aside>
   <main class="main">
@@ -230,7 +233,7 @@ table.t tr:hover td{background:#fbf9f3}
 <div class="print-area" id="printArea"></div>
 <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
 <script>
-var BUILD = "1.34";
+var BUILD = "1.35";
 var APP_ID = "taqneen";
 /* ================= إعداد الاتصال =================
    املأ السطرين التاليين ببيانات مشروع فايربيز الجديد الخاص بالتقنين.
@@ -995,6 +998,7 @@ function panel(eyebrow,title,kids){
 </script>
 <script>
 /* ============ الرقم القومى — مقنّع فى القاعدة، الكامل محلى ============ */
+/* doc-t: جداول المحضر ونموذج الفحص فى المعاينة */
 var NID_KEY = "taqneen_nid_v1";
 function nidStore(){
   try{ return JSON.parse(localStorage.getItem(NID_KEY) || "{}"); }catch(e){ return {}; }
@@ -1420,9 +1424,16 @@ function viewForm(c){
   var bSave=el("button",{"class":"btn solid"},["حفظ الطلب"]);
   bSave.onclick=function(){ saveForm(); };
   act.appendChild(bSave);
-  var bPrint=el("button",{"class":"btn"},["⎙ طباعة نموذج البيانات والفحص"]);
+  var bPrint=el("button",{"class":"btn"},["⎙ طباعة / PDF نموذج الفحص"]);
   bPrint.onclick=function(){ if(saveForm(true)) printInspectionForm(ST.editId); };
   act.appendChild(bPrint);
+  var bWord=el("button",{"class":"btn"},["⇩ نموذج الفحص Word"]);
+  bWord.onclick=function(){
+    if(!saveForm(true)) return;
+    var r=ST.recs[ST.editId];
+    wordDownload("نموذج-الفحص-" + String(r&&r.reqNo||"بلا-رقم").replace(/[\/\\:*?\u0022<>|]/g,"-"), inspectionFormHtml(ST.editId));
+  };
+  act.appendChild(bWord);
   if(rec){
     var bDel=el("button",{"class":"btn warn"},["حذف الطلب"]);
     bDel.onclick=function(){
@@ -1700,8 +1711,12 @@ function drawMap(){
   if(msg) msg.innerHTML="";
   if(!MAP){
     MAP=L.map("map",{scrollWheelZoom:true}).setView([26.8,30.8],5.6);
-    L.tileLayer("https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png",
-      {maxZoom:19, attribution:"© OpenStreetMap"}).addTo(MAP);
+    var sat=L.tileLayer("https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}",
+      {maxZoom:19, attribution:"Esri, Maxar, Earthstar Geographics"});
+    var osm=L.tileLayer("https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png",
+      {maxZoom:19, attribution:"© OpenStreetMap"});
+    sat.addTo(MAP);
+    L.control.layers({"صور الأقمار الصناعية":sat, "خريطة الشوارع":osm}, null, {position:"topleft"}).addTo(MAP);
   }
   if(MLAYER){ MAP.removeLayer(MLAYER); }
   MLAYER=L.layerGroup().addTo(MAP);
@@ -1781,6 +1796,9 @@ function viewCommittee(c){
   var bPr=el("button",{"class":"btn solid"},["⎙ طباعة / حفظ PDF"]);
   bPr.onclick=function(){ if(buildMinutes(false)) window.print(); };
   act.appendChild(bPr);
+  var bWd=el("button",{"class":"btn"},["⇩ تنزيل المحضر Word"]);
+  bWd.onclick=function(){ if(buildMinutes(true)) wordDownload("محضر-تقنين-" + MINUTES_REQNO.replace(/[\/\\:*?\u0022<>|]/g,"-"), MINUTES_HTML); };
+  act.appendChild(bWd);
   var bMark=el("button",{"class":"btn"},["اعتماد كموافقة مبدئية"]);
   bMark.onclick=function(){ markApproved(); };
   act.appendChild(bMark);
@@ -1836,6 +1854,50 @@ function markApproved(){
   publishSummary();
   q("cmMsg").innerHTML="<div class=\u0022okbox\u0022>تم اعتماد الطلب رقم " + esc(r.reqNo||"") + " كموافقة مبدئية، وأُوقف عدّاد المهلة.</div>";
 }
+/* جدول المساحة على نمط محضر الوزارة: فدان | قيراط | سهم + الفدان العشرى */
+function areaTableHtml(r){
+  var f=num(r.areaF)||0, qr=num(r.areaQ)||0, sh=num(r.areaS)||0;
+  var h="<table class=\u0022doc-t\u0022><tr><th>فدان</th><th>قيراط</th><th>سهم</th></tr>";
+  h += "<tr><td>" + f + "</td><td>" + qr + "</td><td>" + sh + "</td></tr></table>";
+  h += "<p style=\u0022font-size:10pt;margin-top:2px\u0022>أى ما يعادل " + fmtNum(areaToFeddan(f,qr,sh),4) + " فدان عشرى (الفدان = " + FEDDAN_M2 + " م²)</p>";
+  return h;
+}
+/* جدول الإحداثيات: مسلسل النقطة – X (خط الطول) – Y (خط العرض)، زوجان فى الصف لتوفير الورق */
+function coordPoints(r){
+  if(r.geo && r.geo.poly && r.geo.poly.length) return r.geo.poly;
+  var la=num(r.lat), lo=num(r.lon);
+  if(la!==null && lo!==null) return [[la,lo]];
+  return [];
+}
+function coordsTableHtml(r){
+  var pts=coordPoints(r);
+  if(!pts.length) return "<p>الاحداثيات: ..............</p>";
+  var h="<table class=\u0022doc-t\u0022><tr><th>م</th><th>X (خط الطول)</th><th>Y (خط العرض)</th><th>م</th><th>X (خط الطول)</th><th>Y (خط العرض)</th></tr>";
+  var half=Math.ceil(pts.length/2), i, a, b;
+  for(i=0;i<half;i++){
+    a=pts[i]; b=pts[i+half];
+    h += "<tr><td>" + (i+1) + "</td><td>" + a[1].toFixed(6) + "</td><td>" + a[0].toFixed(6) + "</td>";
+    if(b) h += "<td>" + (i+half+1) + "</td><td>" + b[1].toFixed(6) + "</td><td>" + b[0].toFixed(6) + "</td></tr>";
+    else h += "<td></td><td></td><td></td></tr>";
+  }
+  h += "</table>";
+  h += "<p style=\u0022font-size:10pt;margin-top:2px\u0022>مرجع الإحداثيات WGS84" + (pts.length>1? " — عدد نقاط المضلّع " + pts.length + (r.geo&&r.geo.name? " (ملف " + esc(r.geo.name) + ")" : "") : "") + "</p>";
+  return h;
+}
+/* ============ تنزيل Word — HTML بترويسة msword، الخط والتنسيق قابلان للتعديل ============ */
+function wordHtml(inner){
+  return "<html dir=\u0022rtl\u0022 lang=\u0022ar\u0022><head><meta charset=\u0022utf-8\u0022><style>" +
+    "body{font-family:Arial,\u0022Times New Roman\u0022,serif;font-size:12pt;direction:rtl;text-align:right}" +
+    "h3{text-align:center;font-size:15pt}" +
+    "table{border-collapse:collapse;width:100%;margin:6pt 0}" +
+    "td,th{border:1pt solid #333;padding:3pt 6pt;text-align:right;font-size:11pt}" +
+    "th{background:#eee}" +
+    "ol,ul{margin:4pt 18pt}li{margin:2pt 0}" +
+    "</style></head><body>" + inner + "</body></html>";
+}
+function wordDownload(name, inner){
+  download(name + ".doc", "application/msword", wordHtml(inner));
+}
 function areaWords(r){
   var f=num(r.areaF)||0, qr=num(r.areaQ)||0, s=num(r.areaS)||0;
   var txt=[];
@@ -1846,16 +1908,7 @@ function areaWords(r){
   var dec=areaToFeddan(f,qr,s);
   return (t || "—") + (dec ? " (" + fmtNum(dec,3) + " فدان)" : "");
 }
-function coordWords(r){
-  if(r.geo && r.geo.poly && r.geo.poly.length>2){
-    var ctr=centroid(r.geo.poly);
-    return "مضلّع بعدد " + r.geo.poly.length + " نقطة، مركزه خط عرض " + ctr[0].toFixed(6) +
-      " وخط طول " + ctr[1].toFixed(6) + " (WGS84) — مرفق ملف KMZ";
-  }
-  var la=num(r.lat), lo=num(r.lon);
-  if(la!==null && lo!==null) return "خط عرض " + la.toFixed(6) + " · خط طول " + lo.toFixed(6) + " (WGS84)";
-  return "..............";
-}
+var MINUTES_HTML="", MINUTES_REQNO="";
 function buildMinutes(silent){
   var r=currentCmRec(); if(!r) return false;
   var typ=q("cmType").value;
@@ -1887,8 +1940,8 @@ function buildMinutes(silent){
   h += "<p>وذلك للنظر في طلبات التقنين الآتية:</p>";
   h += "<p>طلب التقنين رقم (<span class=\u0022ph\u0022>" + esc(r.reqNo||"...........") + "</span>) المقدم من السيد/ <span class=\u0022ph\u0022>" +
        esc(r.name||"...........") + "</span> بشأن الأرض محل الطلب.</p>";
-  h += "<p>بمساحة <span class=\u0022ph\u0022>" + esc(areaWords(r)) + "</span></p>";
-  h += "<p>الاحداثيات <span class=\u0022ph\u0022>" + esc(coordWords(r)) + "</span></p>";
+  h += "<p><b>بمساحة:</b></p>" + areaTableHtml(r);
+  h += "<p><b>الاحداثيات:</b></p>" + coordsTableHtml(r);
   h += "<p><b>أولاً: المستندات والبيانات المعروضة على اللجنة</b><br>اطلعت اللجنة على:</p>";
   h += "<ol><li>طلب التقنين المقدم من صاحب الشأن.</li><li>نموذج البيانات والفحص المعد بمعرفة الجهة المختصة.</li>" +
        "<li>المستندات والمرفقات المؤيدة للطلب.</li><li>بيانات المعاينة والإحداثيات.</li>" +
@@ -1925,6 +1978,7 @@ function buildMinutes(silent){
   h += "</table>";
   h += "<p class=\u0022sig\u0022>تحريراً في " + esc(dt) + "</p>";
 
+  MINUTES_HTML=h; MINUTES_REQNO=r.reqNo||"بلا-رقم";
   q("printArea").innerHTML=h;
   var pv=q("cmPrev");
   pv.style.display="block";
@@ -1936,7 +1990,13 @@ function buildMinutes(silent){
 
 /* ============ طباعة نموذج البيانات والفحص ============ */
 function printInspectionForm(id){
-  var r=ST.recs[id]; if(!r) return;
+  var h=inspectionFormHtml(id);
+  if(!h) return;
+  q("printArea").innerHTML=h;
+  window.print();
+}
+function inspectionFormHtml(id){
+  var r=ST.recs[id]; if(!r) return "";
   r.id=id;
   var yn=function(v){ return v==="نعم" ? "☒ نعم   ☐ لا" : (v==="لا" ? "☐ نعم   ☒ لا" : "☐ نعم   ☐ لا"); };
   var row=function(a,b){ return "<tr><td style=\u0022width:38%\u0022>" + esc(a) + "</td><td>" + esc(b===undefined||b===null||b===""?"—":b) + "</td></tr>"; };
@@ -1980,12 +2040,12 @@ function printInspectionForm(id){
   h += "<p><b>نتيجة مراجعة قطاع التخطيط</b></p><table>";
   h += row("موقف المراجعة على الزمام", r.planReview) + row("موقف الزراعة قبل " + CULT_CUTOFF, r.cultivation);
   h += row("ملف KML", r.kmlFlag) + row("تقرير معاينة مهندس الرى", r.inspReport) + row("الملاحظات", r.planNotes) + "</table>";
+  h += "<p><b>الإحداثيات والحدود المكانية</b></p>" + coordsTableHtml(r);
   h += "<p><b>اعتماد البيانات</b></p><table>";
   h += row("الاسم", r.approverName) + row("الوظيفة", r.approverJob);
   h += "<tr><td>التوقيع</td><td style=\u0022height:34px\u0022></td></tr>";
   h += "<tr><td>اعتماد المدير العام المختص: " + esc(r.gmName||"") + "</td><td style=\u0022height:38px\u0022></td></tr></table>";
-  q("printArea").innerHTML=h;
-  window.print();
+  return h;
 }
 
 /* ============ التصدير — جدول قطاع التخطيط ============ */

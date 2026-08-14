@@ -1,5 +1,5 @@
 /* منظومة تقنين الأراضى المنزرعة — Service Worker */
-var VERSION = "taqneen-v1.34";
+var VERSION = "taqneen-v1.35";
 var CORE = ["./", "./index.html", "./manifest.json", "./icon-192.png", "./icon-512.png"];
 
 self.addEventListener("install", function (e) {
@@ -16,7 +16,7 @@ self.addEventListener("activate", function (e) {
 self.addEventListener("fetch", function (e) {
   var url = e.request.url;
   /* لا يُخزَّن مؤقتاً: القاعدة الحية وبلاطات الخرائط */
-  if (url.indexOf("firebasedatabase.app") >= 0 || url.indexOf("tile.openstreetmap.org") >= 0) return;
+  if (url.indexOf("firebasedatabase.app") >= 0 || url.indexOf("tile.openstreetmap.org") >= 0 || url.indexOf("arcgisonline.com") >= 0) return;
   if (e.request.method !== "GET") return;
   /* المستند: الشبكة أولاً حتى تصل البيلدات الجديدة */
   if (e.request.mode === "navigate" || url.indexOf("index.html") >= 0) {
