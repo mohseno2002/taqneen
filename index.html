@@ -209,7 +209,7 @@ table.t tr:hover td{background:#fbf9f3}
     <div class="nav-foot">
       <div id="syncFoot" style="margin-bottom:6px"></div>
       <small id="whoFoot"></small><br>
-      <small>build 1.27</small>
+      <small>build 1.30</small>
     </div>
   </aside>
   <main class="main">
@@ -230,7 +230,7 @@ table.t tr:hover td{background:#fbf9f3}
 <div class="print-area" id="printArea"></div>
 <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
 <script>
-var BUILD = "1.27";
+var BUILD = "1.30";
 var APP_ID = "taqneen";
 /* ================= إعداد الاتصال =================
    املأ السطرين التاليين ببيانات مشروع فايربيز الجديد الخاص بالتقنين.
@@ -371,6 +371,19 @@ function uid(){
 }
 
 /* ============ طبقة القاعدة — REST بلا SDK ============ */
+/* مفاتيح فايربيز لا تقبل . $ # [ ] / ولا محارف التحكم — الكشف قبل الإرسال لا بعده */
+var BAD_KEY = /[.$#\[\]\/\u0000-\u001f\u007f]/;
+function badSegment(path){
+  var segs = String(path).split("/"), i;
+  for(i=0;i<segs.length;i++){
+    if(!segs[i].length) return "(مقطع فارغ)";
+    if(BAD_KEY.test(segs[i])) return segs[i];
+  }
+  return "";
+}
+/* 400/404 خطأ دائم — إعادة المحاولة لن تنجح أبداً، فلا يدخل الطابور ولا يسدّه */
+function permanentErr(status){ return status===400 || status===404 || status===414 || status===422; }
+
 var Db = {
   queueKey:"taqneen_queue_v1",
   status:"idle",
@@ -423,6 +436,12 @@ var Db = {
     });
   },
   patch:function(path,obj){
+    var bad = badSegment(path);
+    if(bad){
+      var m = "مسار غير صالح: المقطع \u0022" + bad + "\u0022 يحوى محرفاً ممنوعاً فى مفاتيح فايربيز (. $ # [ ] /)";
+      Db.setBadge("err", m);
+      return Promise.resolve(false);
+    }
     obj = obj || {};
     obj.updatedAt = Date.now();
     obj.src = APP_ID;
@@ -438,6 +457,11 @@ var Db = {
       return true;
     }).catch(function(e){
       var why = Db.hint(e);
+      if(/HTTP (400|404|414|422)/.test(why)){
+        /* خطأ دائم: يُعلَن ولا يُخزَّن — الطابور لا يُسدّ بطلب لن ينجح أبداً */
+        Db.setBadge("err", why);
+        return false;
+      }
       Db.enqueue(path,obj,why);
       Db.setBadge("wait", why);
       return false;
@@ -483,7 +507,17 @@ var Db = {
     }).catch(function(e){
       var why = Db.hint(e);
       var a = Db.queue();
-      if(a.length){ a[0].why = why; try{ localStorage.setItem(Db.queueKey, JSON.stringify(a)); }catch(x){} }
+      if(a.length){
+        if(/HTTP (400|404|414|422)/.test(why) || badSegment(a[0].path)){
+          a.shift();   /* مسموم: يُسقط وإلا سدّ الطابور على ما بعده */
+          try{ localStorage.setItem(Db.queueKey, JSON.stringify(a)); }catch(x){}
+          Db.setBadge("err", "أُسقط طلب لا يمكن تنفيذه — " + why);
+          if(a.length) setTimeout(Db.flush,400);
+          return;
+        }
+        a[0].why = why;
+        try{ localStorage.setItem(Db.queueKey, JSON.stringify(a)); }catch(x){}
+      }
       Db.setBadge("wait", why);
     });
   },
@@ -518,7 +552,13 @@ var Auth = {
       "INVALID_LOGIN_CREDENTIALS":"البريد أو كلمة المرور غير صحيحة", "USER_DISABLED":"الحساب موقوف",
       "TOO_MANY_ATTEMPTS_TRY_LATER":"محاولات كثيرة — انتظر قليلاً",
       "TOKEN_EXPIRED":"انتهت الجلسة — سجّل الدخول من جديد",
-      "INVALID_REFRESH_TOKEN":"الجلسة غير صالحة — سجّل الدخول من جديد" };
+      "INVALID_REFRESH_TOKEN":"الجلسة غير صالحة — سجّل الدخول من جديد",
+      "EMAIL_EXISTS":"البريد مستخدَم بالفعل — استعمل «ربط حساب قائم» بالمعرّف",
+      "INVALID_EMAIL":"صيغة البريد غير صحيحة",
+      "WEAK_PASSWORD : Password should be at least 6 characters":"كلمة المرور قصيرة — ٦ محارف على الأقل",
+      "OPERATION_NOT_ALLOWED":"إنشاء الحسابات موقوف من إعدادات المشروع (Enable create) — فعّله أو أنشئ الحساب من الكونسول",
+      "ADMIN_ONLY_OPERATION":"إنشاء الحسابات موقوف من إعدادات المشروع — فعّله أو أنشئ الحساب من الكونسول",
+      "CREDENTIAL_TOO_OLD_LOGIN_AGAIN":"الجلسة قديمة — سجّل الخروج والدخول ثم أعد المحاولة" };
     return m[code] || code;
   },
   login:function(email,pass){
@@ -550,6 +590,39 @@ var Auth = {
       });
   },
   valid:function(){ return !!AUTH.idToken && AUTH.exp > Date.now() + 60000; },
+  /* إنشاء حساب جديد من داخل التطبيق — لا يمسّ جلسة اللجنة الحالية إطلاقاً */
+  createUser:function(email,pass){
+    if(!CFG.key) return Promise.reject(new Error("مفتاح المشروع غير مضبوط"));
+    return fetch("https://identitytoolkit.googleapis.com/v1/accounts:signUp?key=" + encodeURIComponent(CFG.key),{
+      method:"POST", headers:{"Content-Type":"application/json"},
+      body:JSON.stringify({email:email, password:pass, returnSecureToken:false})
+    }).then(function(r){ return r.json().then(function(j){ return {ok:r.ok, j:j}; }); })
+      .then(function(res){
+        if(!res.ok){
+          var code = res.j && res.j.error ? res.j.error.message : "فشل الإنشاء";
+          throw new Error(Auth.msg(code));
+        }
+        return res.j.localId;
+      });
+  },
+  /* تغيير كلمة مرور المستخدم الحالى بنفسه */
+  changePass:function(newPass){
+    return Auth.ensure().then(function(){
+      return fetch("https://identitytoolkit.googleapis.com/v1/accounts:update?key=" + encodeURIComponent(CFG.key),{
+        method:"POST", headers:{"Content-Type":"application/json"},
+        body:JSON.stringify({idToken:AUTH.idToken, password:newPass, returnSecureToken:true})
+      });
+    }).then(function(r){ return r.json().then(function(j){ return {ok:r.ok, j:j}; }); })
+      .then(function(res){
+        if(!res.ok) throw new Error(Auth.msg(res.j && res.j.error ? res.j.error.message : "تعذّر التغيير"));
+        if(res.j.idToken){
+          AUTH.idToken=res.j.idToken; AUTH.refreshToken=res.j.refreshToken || AUTH.refreshToken;
+          AUTH.exp=Date.now() + (parseInt(res.j.expiresIn,10)||3600)*1000;
+          Auth.save();
+        }
+        return true;
+      });
+  },
   ensure:function(){
     if(Auth.valid()) return Promise.resolve(true);
     return Auth.refresh();
@@ -1971,7 +2044,10 @@ function aclRows(){
 function aclSave(uid, role, admin, name, msgId){
   var m=q(msgId);
   uid=String(uid||"").trim();
-  if(uid.length<20){ if(m) m.innerHTML="<div class=\u0022errbox\u0022>المعرّف (UID) غير صالح — انسخه من قائمة المستخدمين فى كونسول فايربيز.</div>"; return; }
+  if(!/^[A-Za-z0-9]{20,64}$/.test(uid)){
+    if(m) m.innerHTML="<div class=\u0022errbox\u0022>المعرّف غير صالح: المطلوب <b>User UID</b> من عمود المعرّف فى كونسول فايربيز — حروف وأرقام لاتينية فقط (نحو 28 خانة). ما لصقته يحوى محارف غير مسموحة أو طوله غير صحيح؛ البريد الإلكترونى ليس معرّفاً.</div>";
+    return;
+  }
   if(role!=="entry" && role!=="committee"){ if(m) m.innerHTML="<div class=\u0022errbox\u0022>اختر الدور.</div>"; return; }
   if(role==="entry" && !admin){ if(m) m.innerHTML="<div class=\u0022errbox\u0022>مُدخل البيانات لا بد له من إدارة.</div>"; return; }
   if(role==="entry" && ST.admins.indexOf(admin)<0){ if(m) m.innerHTML="<div class=\u0022errbox\u0022>اسم الإدارة غير موجود فى القائمة.</div>"; return; }
@@ -2035,8 +2111,66 @@ function viewUsersPanel(c){
     p.appendChild(w);
   }
 
-  p.appendChild(el("div",{"class":"sechead"},["إضافة أو تعديل صلاحية"]));
-  p.appendChild(el("div",{"class":"hint"},["أنشئ الحساب أولاً من كونسول فايربيز (Authentication ← Add user)، ثم انسخ عمود User UID والصقه هنا."]));
+  /* ===== إنشاء حساب إدارة — كل شىء من داخل التطبيق ===== */
+  p.appendChild(el("div",{"class":"sechead"},["إنشاء حساب إدارة جديد"]));
+  var g1=el("div",{},[el("label",{"class":"f"},["البريد الإلكترونى للحساب"])]);
+  var nEmail=el("input",{"class":"i",id:"nuEmail",type:"email",inputmode:"email",placeholder:"qena@taqneen-mwri.gov"});
+  g1.appendChild(nEmail);
+  var g2=el("div",{},[el("label",{"class":"f"},["كلمة مرور مؤقتة (٦ محارف فأكثر)"])]);
+  var nPass=el("input",{"class":"i",id:"nuPass",type:"text",placeholder:"تُسلَّم للإدارة وتغيّرها بنفسها"});
+  g2.appendChild(nPass);
+  var g3=el("div",{},[el("label",{"class":"f"},["الإدارة المركزية"])]);
+  var nAdm=el("select",{"class":"i",id:"nuAdmin"},[]);
+  ST.admins.forEach(function(a){ nAdm.appendChild(el("option",{value:a},[a])); });
+  g3.appendChild(nAdm);
+  p.appendChild(frow([g1,g2,g3]));
+  var g4=el("div",{},[el("label",{"class":"f"},["اسم المسؤول"])]);
+  var nName=el("input",{"class":"i",id:"nuName",placeholder:"م / ..."});
+  g4.appendChild(nName);
+  var g5=el("div",{},[el("label",{"class":"f"},["الصفة"])]);
+  var nRole=el("select",{"class":"i",id:"nuRole"},[
+    el("option",{value:"entry"},["مُدخل بيانات — إدارة مركزية"]),
+    el("option",{value:"committee"},["اللجنة الدائمة — وصول شامل"])
+  ]);
+  g5.appendChild(nRole);
+  p.appendChild(frow([g4,g5],true));
+  nRole.onchange=function(){ g3.style.display = (this.value==="committee") ? "none" : "block"; };
+  var actN=el("div",{"class":"actions"},[]);
+  var bN=el("button",{"class":"btn solid"},["إنشاء الحساب ومنح الصلاحية"]);
+  bN.onclick=function(){
+    var em=nEmail.value.trim(), pw=nPass.value, adm=nAdm.value, nm=nName.value.trim(), rl=nRole.value;
+    var m=q("nuMsg");
+    if(em.indexOf("@")<1 || em.length<6){ m.innerHTML="<div class=\u0022errbox\u0022>أدخل بريداً صحيحاً.</div>"; return; }
+    if(!pw || pw.length<6){ m.innerHTML="<div class=\u0022errbox\u0022>كلمة المرور ٦ محارف على الأقل.</div>"; return; }
+    m.innerHTML="<div class=\u0022okbox\u0022>جارٍ الإنشاء…</div>";
+    bN.disabled=true;
+    Auth.createUser(em,pw).then(function(uid){
+      var obj={ role:rl, name:nm, admin:(rl==="committee") ? "" : adm };
+      if(!ACLS) ACLS={};
+      ACLS[uid]={role:obj.role, admin:obj.admin, name:obj.name};
+      return Db.patch(aclPath(uid), obj).then(function(okw){
+        bN.disabled=false;
+        if(okw===false){
+          m.innerHTML="<div class=\u0022errbox\u0022>أُنشئ الحساب لكن تعذّر حفظ صلاحيته — راجع لوحة التعديلات المؤجَّلة، ثم اربطه بمعرّفه: " + esc(uid) + "</div>";
+        }else{
+          m.innerHTML="<div class=\u0022okbox\u0022><b>تم.</b> سلّم هذه البيانات للإدارة:<br>البريد: " + esc(em) +
+            "<br>كلمة المرور: " + esc(pw) + "<br>الصفة: " + (rl==="committee"?"اللجنة الدائمة":"مُدخل " + esc(adm)) +
+            "<br><span style=\u0022font-size:10px\u0022>المعرّف: " + esc(uid) + "</span></div>";
+          nEmail.value=""; nPass.value=""; nName.value="";
+        }
+        render();
+      });
+    }).catch(function(e){
+      bN.disabled=false;
+      m.innerHTML="<div class=\u0022errbox\u0022>" + esc(e.message) + "</div>";
+    });
+  };
+  actN.appendChild(bN);
+  p.appendChild(actN);
+  p.appendChild(el("div",{id:"nuMsg"},[]));
+
+  p.appendChild(el("div",{"class":"sechead"},["ربط حساب قائم بمعرّفه"]));
+  p.appendChild(el("div",{"class":"hint"},["لحساب أُنشئ من قبل: الصق User UID الخاص به لتعديل صفته أو إدارته."]));
   var f1=el("div",{},[el("label",{"class":"f"},["المعرّف (User UID)"])]);
   var iU=el("input",{"class":"i",id:"acUid",placeholder:"28 حرفاً من كونسول فايربيز"});
   f1.appendChild(iU);
@@ -2152,6 +2286,26 @@ function viewAdmins(c){
     el("span",{"class":"chip"},[AUTH.email||ST.user||"—"]),
     el("span",{"class":"chip"},["الجلسة تنتهى " + new Date(AUTH.exp).toLocaleTimeString("ar-EG")])
   ]));
+  p2.appendChild(el("div",{"class":"sechead"},["تغيير كلمة مرورى"]));
+  var pwWrap=el("div",{},[el("label",{"class":"f"},["كلمة مرور جديدة (٦ محارف فأكثر)"])]);
+  var pwIn=el("input",{"class":"i",id:"myPass",type:"password",placeholder:"••••••"});
+  pwWrap.appendChild(pwIn);
+  p2.appendChild(pwWrap);
+  var pwAct=el("div",{"class":"actions"},[]);
+  var pwB=el("button",{"class":"btn"},["تغيير كلمة المرور"]);
+  pwB.onclick=function(){
+    var m=q("pwMsg");
+    if(!pwIn.value || pwIn.value.length<6){ m.innerHTML="<div class=\u0022errbox\u0022>٦ محارف على الأقل.</div>"; return; }
+    m.innerHTML="<div class=\u0022okbox\u0022>جارٍ التغيير…</div>";
+    Auth.changePass(pwIn.value).then(function(){
+      pwIn.value="";
+      m.innerHTML="<div class=\u0022okbox\u0022>تم تغيير كلمة المرور. استعملها فى الدخول القادم.</div>";
+    }).catch(function(e){ m.innerHTML="<div class=\u0022errbox\u0022>" + esc(e.message) + "</div>"; });
+  };
+  pwAct.appendChild(pwB);
+  p2.appendChild(pwAct);
+  p2.appendChild(el("div",{id:"pwMsg"},[]));
+
   var act2=el("div",{"class":"actions"},[]);
   var b2=el("button",{"class":"btn warn"},["تسجيل الخروج"]);
   b2.onclick=function(){ if(confirm("تسجيل الخروج من المنظومة؟")) logout(); };

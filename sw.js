@@ -1,5 +1,5 @@
 /* منظومة تقنين الأراضى المنزرعة — Service Worker */
-var VERSION = "taqneen-v1.27";
+var VERSION = "taqneen-v1.30";
 var CORE = ["./", "./index.html", "./manifest.json", "./icon-192.png", "./icon-512.png"];
 
 self.addEventListener("install", function (e) {
