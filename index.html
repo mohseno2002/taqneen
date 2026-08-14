@@ -209,7 +209,7 @@ table.t tr:hover td{background:#fbf9f3}
     <div class="nav-foot">
       <div id="syncFoot" style="margin-bottom:6px"></div>
       <small id="whoFoot"></small><br>
-      <small>build 1.33</small>
+      <small>build 1.34</small>
     </div>
   </aside>
   <main class="main">
@@ -230,7 +230,7 @@ table.t tr:hover td{background:#fbf9f3}
 <div class="print-area" id="printArea"></div>
 <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
 <script>
-var BUILD = "1.33";
+var BUILD = "1.34";
 var APP_ID = "taqneen";
 /* ================= إعداد الاتصال =================
    املأ السطرين التاليين ببيانات مشروع فايربيز الجديد الخاص بالتقنين.
@@ -382,7 +382,7 @@ function badSegment(path){
   return "";
 }
 /* 400/404 خطأ دائم — إعادة المحاولة لن تنجح أبداً، فلا يدخل الطابور ولا يسدّه */
-function permanentErr(status){ return status===400 || status===404 || status===414 || status===422; }
+function permErr(why){ return /HTTP (400|404|414|422)/.test(String(why)); }
 
 var Db = {
   queueKey:"taqneen_queue_v1",
@@ -462,7 +462,7 @@ var Db = {
       return true;
     }).catch(function(e){
       var why = Db.hint(e);
-      if(/HTTP (400|404|414|422)/.test(why)){
+      if(permErr(why)){
         /* خطأ دائم: يُعلَن ولا يُخزَّن — الطابور لا يُسدّ بطلب لن ينجح أبداً */
         Db.setBadge("err", why);
         return false;
@@ -473,25 +473,39 @@ var Db = {
     });
   },
   remove:function(path){
+    var bad = badSegment(path);
+    if(bad){
+      Db.setBadge("err","مسار غير صالح: المقطع \u0022" + bad + "\u0022 يحوى محرفاً ممنوعاً فى مفاتيح فايربيز (. $ # [ ] /)");
+      return Promise.resolve(false);
+    }
     return Auth.ensure().then(function(){
       return fetch(Db.url(path),{method:"DELETE"});
     }).then(function(r){
-      if(!r.ok) throw new Error("HTTP " + r.status);
+      if(!r.ok) return Db.readErr(r).then(function(e){ throw e; });
       Db.setBadge("ok","");
+      Db.flush();
       return true;
-    }).catch(function(e){ Db.setBadge("err", Db.hint(e)); return false; });
+    }).catch(function(e){
+      var why = Db.hint(e);
+      if(permErr(why)){ Db.setBadge("err", why); return false; }
+      /* الفشل العابر يصطف — الحذف الضائع يترك سجلاً مكرراً بين عقدتين */
+      Db.enqueue(path, null, why, "DELETE");
+      Db.setBadge("wait", why);
+      return false;
+    });
   },
   queue:function(){
     try{ return JSON.parse(localStorage.getItem(Db.queueKey) || "[]"); }catch(e){ return []; }
   },
-  enqueue:function(path,obj,why){
+  enqueue:function(path,obj,why,m){
+    m = (m==="DELETE") ? "DELETE" : "PATCH";
     var arr = Db.queue();
     for(var i=0;i<arr.length;i++){
-      if(arr[i].path===path){ arr[i].obj=obj; arr[i].t=Date.now(); arr[i].why=why||""; 
+      if(arr[i].path===path && (arr[i].m||"PATCH")===m){ arr[i].obj=obj; arr[i].t=Date.now(); arr[i].why=why||""; 
         try{ localStorage.setItem(Db.queueKey, JSON.stringify(arr)); }catch(e){}
         return; }
     }
-    arr.push({path:path, obj:obj, t:Date.now(), why:why||""});
+    arr.push({path:path, obj:obj, t:Date.now(), why:why||"", m:m});
     if(arr.length>400) arr = arr.slice(-400);
     try{ localStorage.setItem(Db.queueKey, JSON.stringify(arr)); }catch(e){}
   },
@@ -499,8 +513,11 @@ var Db = {
     var arr = Db.queue();
     if(!arr.length) return;
     var item = arr[0];
+    var mth = (item.m==="DELETE") ? "DELETE" : "PATCH";
     Auth.ensure().then(function(){
-      return fetch(Db.url(item.path),{method:"PATCH",headers:{"Content-Type":"application/json"},body:JSON.stringify(item.obj)});
+      var opt = {method:mth};
+      if(mth!=="DELETE"){ opt.headers={"Content-Type":"application/json"}; opt.body=JSON.stringify(item.obj); }
+      return fetch(Db.url(item.path),opt);
     }).then(function(r){
         if(!r.ok) return Db.readErr(r).then(function(e){ throw e; });
         return r;
@@ -513,7 +530,7 @@ var Db = {
       var why = Db.hint(e);
       var a = Db.queue();
       if(a.length){
-        if(/HTTP (400|404|414|422)/.test(why) || badSegment(a[0].path)){
+        if(permErr(why) || badSegment(a[0].path)){
           a.shift();   /* مسموم: يُسقط وإلا سدّ الطابور على ما بعده */
           try{ localStorage.setItem(Db.queueKey, JSON.stringify(a)); }catch(x){}
           Db.setBadge("err", "أُسقط طلب لا يمكن تنفيذه — " + why);
@@ -684,6 +701,15 @@ function absorbRequests(node){
   ST.recs = {};
   var legacy = [];
   if(!node) return legacy;
+  if(ST.role!=="committee"){
+    /* جلب المُدخل منطَّق على إدارته — كل مفاتيح المستوى الأول سجلات، ولا كشف legacy هنا:
+       السجل يحمل reqNo عند المستوى الأول فكان يُعامَل كبقايا بيلد 1.00، فتُعاد كتابته كل جلب
+       ويُحاوَل حذفٌ عند الجذر يرفضه الخادم (Permission denied) وتعلق شارة خطأ فى كل فتح */
+    for(var ek in node){
+      if(node[ek] && typeof node[ek]==="object"){ node[ek].id=ek; ST.recs[ek]=node[ek]; }
+    }
+    return legacy;
+  }
   for(var k in node){
     var v = node[k];
     if(!v || typeof v!=="object") continue;
@@ -993,7 +1019,6 @@ function nidShow(r){
   if(f) return f;
   return r.nidMask || "—";
 }
-function nidIsLocal(r){ return !!nidFull(r.id); }
 
 /* ============ لوحة القيادة ============ */
 function viewDash(c){
@@ -1600,6 +1625,10 @@ function saveForm(silent){
   if(old.admin && old.admin!==r.admin && old.id){
     Db.remove(reqPath({admin:old.admin, id:id}));
     Db.remove(geoPath({admin:old.admin, id:id}));
+    if(GEOC[id] && GEOC[id].poly && !(GEO && GEO.dirty)){
+      /* النقل لا يُضيع الحدود: المضلّع المحفوظ يُعاد تحت عقدة الإدارة الجديدة */
+      Db.patch(geoPath(r), {poly:GEOC[id].poly, name:GEOC[id].name||""});
+    }
   }
   Db.patch(reqPath(r), r);
   if(GEO && GEO.poly && GEO.poly.length && GEO.dirty){
@@ -1889,9 +1918,9 @@ function buildMinutes(silent){
   h += "<p>وتعتبر الموافقة المبدئية كأن لم تكن في حالة عدم استيفاء الالتزامات المشار إليها أو ثبوت عدم صحة أي من البيانات أو المستندات المقدمة.</p>";
   h += "<p><b>ثالثاً: مسؤولية البيانات</b><br>تؤكد اللجنة أن جميع بيانات المعاينة الميدانية والإحداثيات والمساحات وبيانات مصدر المياه الواردة بنموذج البيانات والفحص المرفق قد تم إعدادها ومراجعتها بمعرفة الجهة المختصة، وتتحمل تلك الجهة المسؤولية الكاملة عن صحة ودقة البيانات المقدمة.</p>";
   h += "<p><b>التوقيعات</b></p><table><tr><th>الاسم</th><th>الصفة</th><th>التوقيع</th></tr>";
-  var sigs=[[ "م/ " + chair, "رئيس اللجنة"],["م/ أمل محمد محمود جاسر","عضو"],["م/ محمد توفيق زكي","عضو"],
+  var sigs=[[ "م/ " + chair, "رئيس اللجنة"],["م/ أمل محمد محمود جاسر","عضو"],["م/ محمد توفيق ذكى","عضو"],
     ["د/ عيد حسنى عاشور حسن","عضو"],["م/ " + ga,"استعانة"],["د/ عمرو محمد عياد","استعانة"],
-    ["م/ هبة رفاعى بشرى","استعانة"],["م/ وديان محمد حمدي الجزار","استعانة"]];
+    ["د/ هبة رفاعى بشرى","استعانة"],["م/ وديان محمد حمدي الجزار","استعانة"]];
   sigs.forEach(function(s){ h += "<tr><td>" + esc(s[0]) + "</td><td>" + esc(s[1]) + "</td><td style=\u0022height:34px\u0022></td></tr>"; });
   h += "</table>";
   h += "<p class=\u0022sig\u0022>تحريراً في " + esc(dt) + "</p>";
@@ -2283,7 +2312,8 @@ function viewAdmins(c){
       var td=tr.getElementsByTagName("td")[2];
       var bx=el("button",{"class":"btn sm warn"},["إسقاط"]);
       bx.onclick=function(){
-        var a=Db.queue(); a.splice(ix,1);
+        /* الإسقاط بهوية العنصر لا بفهرسه — الطابور قد يتغيّر بين الرسم والضغط */
+        var a=Db.queue().filter(function(x){ return !(x.path===it.path && x.t===it.t); });
         try{ localStorage.setItem(Db.queueKey, JSON.stringify(a)); }catch(e){}
         Db.setBadge(a.length?"wait":"ok","");
         render();
