@@ -209,7 +209,7 @@ table.t tr:hover td{background:#fbf9f3}
     <div class="nav-foot">
       <div id="syncFoot" style="margin-bottom:6px"></div>
       <small id="whoFoot"></small><br>
-      <small>build 1.25</small>
+      <small>build 1.26</small>
     </div>
   </aside>
   <main class="main">
@@ -230,7 +230,7 @@ table.t tr:hover td{background:#fbf9f3}
 <div class="print-area" id="printArea"></div>
 <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
 <script>
-var BUILD = "1.25";
+var BUILD = "1.26";
 var APP_ID = "taqneen";
 /* ================= إعداد الاتصال =================
    املأ السطرين التاليين ببيانات مشروع فايربيز الجديد الخاص بالتقنين.
@@ -1917,6 +1917,128 @@ function viewExports(c){
 }
 function nidLocalCount(){ var m=nidStore(); return Object.keys(m).length; }
 
+/* ============ مدير المستخدمين — للجنة وحدها ============ */
+var ACLS = null;
+var ACL_TRIED = false;
+function aclPath(uid){ return "apps/" + APP_ID + "/acl/" + uid; }
+function loadAcls(cb){
+  Db.get("apps/" + APP_ID + "/acl").then(function(d){
+    ACLS = d || {};
+    if(cb) cb(null);
+  }).catch(function(e){
+    ACLS = null;
+    if(cb) cb(e);
+  });
+}
+function aclRows(){
+  var out=[];
+  for(var uid in (ACLS||{})){
+    var a=ACLS[uid];
+    if(a && typeof a==="object") out.push({uid:uid, role:a.role||"", admin:a.admin||"", name:a.name||""});
+  }
+  out.sort(function(x,y){ return (x.role===y.role) ? (x.admin<y.admin?-1:1) : (x.role==="committee"?-1:1); });
+  return out;
+}
+function aclSave(uid, role, admin, name, msgId){
+  var m=q(msgId);
+  uid=String(uid||"").trim();
+  if(uid.length<20){ if(m) m.innerHTML="<div class=\u0022errbox\u0022>المعرّف (UID) غير صالح — انسخه من قائمة المستخدمين فى كونسول فايربيز.</div>"; return; }
+  if(role!=="entry" && role!=="committee"){ if(m) m.innerHTML="<div class=\u0022errbox\u0022>اختر الدور.</div>"; return; }
+  if(role==="entry" && !admin){ if(m) m.innerHTML="<div class=\u0022errbox\u0022>مُدخل البيانات لا بد له من إدارة.</div>"; return; }
+  if(role==="entry" && ST.admins.indexOf(admin)<0){ if(m) m.innerHTML="<div class=\u0022errbox\u0022>اسم الإدارة غير موجود فى القائمة.</div>"; return; }
+  var obj={ role:role, name:String(name||"").trim() };
+  obj.admin = (role==="committee") ? "" : admin;
+  if(!ACLS) ACLS={};
+  ACLS[uid]={role:obj.role, admin:obj.admin, name:obj.name};
+  Db.patch(aclPath(uid), obj);
+  if(m) m.innerHTML="<div class=\u0022okbox\u0022>تم حفظ صلاحية " + esc(obj.name||uid.slice(0,8)) + " — " +
+    (role==="committee" ? "اللجنة الدائمة" : "مُدخل " + esc(admin)) + ".</div>";
+  render();
+}
+function aclDelete(uid){
+  if(uid===AUTH.uid){
+    var mm=q("acMsg");
+    if(mm) mm.innerHTML="<div class=\u0022errbox\u0022>لا يمكنك سحب صلاحيتك أنت — ستفقد الدخول للمنظومة ولن يعيدها إلا الكونسول.</div>";
+    return;
+  }
+  if(!confirm("سحب صلاحية هذا المستخدم؟ لن يستطيع الدخول بعدها.")) return;
+  if(ACLS) delete ACLS[uid];
+  Db.remove(aclPath(uid));
+  render();
+}
+function viewUsersPanel(c){
+  var p=panel("الضبط","مدير المستخدمين",[]);
+  if(ACLS===null){
+    p.appendChild(el("div",{"class":"empty"},[
+      el("b",{},["جدول الصلاحيات غير محمَّل"]),
+      el("div",{},["إمّا لم يُجلب بعد، أو القواعد لا تسمح للجنة بقراءته كاملاً."])
+    ]));
+    var ab=el("div",{"class":"actions"},[]);
+    var br=el("button",{"class":"btn solid"},["جلب الجدول"]);
+    br.onclick=function(){ loadAcls(function(e){ if(e) ST.lastErr=Db.hint(e); render(); }); };
+    ab.appendChild(br);
+    p.appendChild(ab);
+    if(ST.lastErr) p.appendChild(el("div",{"class":"errbox"},[ST.lastErr]));
+    c.appendChild(p);
+    return;
+  }
+  var rows=aclRows();
+  var w=el("div",{"class":"tbl-wrap"},[]);
+  var t=el("table",{"class":"t"},[]);
+  t.innerHTML="<thead><tr><th>الاسم</th><th>الصفة</th><th>الإدارة</th><th>المعرّف</th><th>إجراء</th></tr></thead>";
+  var tb=el("tbody",{},[]);
+  rows.forEach(function(r){
+    var tr=el("tr",{},[]);
+    tr.innerHTML="<td>"+esc(r.name||"—")+"</td>"+
+      "<td>"+(r.role==="committee"?"<span class=\u0022pill green\u0022>اللجنة الدائمة</span>":"<span class=\u0022pill lake\u0022>مُدخل بيانات</span>")+"</td>"+
+      "<td>"+esc(r.admin||"— الجمهورية —")+"</td>"+
+      "<td style=\u0022font-family:var(--mono);font-size:10px\u0022>"+esc(r.uid.slice(0,10))+"…</td><td></td>";
+    var td=tr.getElementsByTagName("td")[4];
+    var bd=el("button",{"class":"btn sm warn"},["سحب"]);
+    bd.onclick=function(){ aclDelete(r.uid); };
+    td.appendChild(bd);
+    tb.appendChild(tr);
+  });
+  t.appendChild(tb); w.appendChild(t);
+  if(!rows.length){
+    p.appendChild(el("div",{"class":"empty"},[el("b",{},["لا توجد صلاحيات مسجَّلة"]),el("div",{},["أضف أول مستخدم من النموذج أدناه."])]));
+  }else{
+    p.appendChild(w);
+  }
+
+  p.appendChild(el("div",{"class":"sechead"},["إضافة أو تعديل صلاحية"]));
+  p.appendChild(el("div",{"class":"hint"},["أنشئ الحساب أولاً من كونسول فايربيز (Authentication ← Add user)، ثم انسخ عمود User UID والصقه هنا."]));
+  var f1=el("div",{},[el("label",{"class":"f"},["المعرّف (User UID)"])]);
+  var iU=el("input",{"class":"i",id:"acUid",placeholder:"28 حرفاً من كونسول فايربيز"});
+  f1.appendChild(iU);
+  var f2=el("div",{},[el("label",{"class":"f"},["الصفة"])]);
+  var sR=el("select",{"class":"i",id:"acRole"},[
+    el("option",{value:"entry"},["مُدخل بيانات — إدارة مركزية"]),
+    el("option",{value:"committee"},["اللجنة الدائمة — وصول شامل"])
+  ]);
+  f2.appendChild(sR);
+  var f3=el("div",{},[el("label",{"class":"f"},["الإدارة المركزية"])]);
+  var sA=el("select",{"class":"i",id:"acAdmin"},[]);
+  ST.admins.forEach(function(a){ sA.appendChild(el("option",{value:a},[a])); });
+  f3.appendChild(sA);
+  p.appendChild(frow([f1,f2,f3]));
+  var f4=el("div",{},[el("label",{"class":"f"},["الاسم (يظهر فى السجل)"])]);
+  var iN=el("input",{"class":"i",id:"acName",placeholder:"م / ..."});
+  f4.appendChild(iN);
+  p.appendChild(f4);
+  sR.onchange=function(){ f3.style.display = (this.value==="committee") ? "none" : "block"; };
+  var act=el("div",{"class":"actions"},[]);
+  var bs=el("button",{"class":"btn solid"},["حفظ الصلاحية"]);
+  bs.onclick=function(){ aclSave(iU.value, sR.value, sA.value, iN.value, "acMsg"); };
+  act.appendChild(bs);
+  var brl=el("button",{"class":"btn"},["↻ تحديث الجدول"]);
+  brl.onclick=function(){ loadAcls(function(){ render(); }); };
+  act.appendChild(brl);
+  p.appendChild(act);
+  p.appendChild(el("div",{id:"acMsg"},[]));
+  c.appendChild(p);
+}
+
 /* ============ الإدارات والصلاحيات ============ */
 function viewAdmins(c){
   var p=panel("الضبط","الإدارات المركزية (" + ST.admins.length + ")",[]);
@@ -1955,6 +2077,11 @@ function viewAdmins(c){
   p.appendChild(act);
   p.appendChild(el("div",{id:"admMsg"},[]));
   c.appendChild(p);
+
+  if(ST.role==="committee"){
+    if(ACLS===null && !ACL_TRIED){ ACL_TRIED=true; loadAcls(function(){ render(); }); }
+    viewUsersPanel(c);
+  }
 
   var p2=panel("الجلسة","صفتك الحالية",[]);
   p2.appendChild(el("div",{"class":"rowflex"},[
